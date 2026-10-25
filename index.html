@@ -1,11 +1,31 @@
 <!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Workout Timer · TV</title>
 <style>body{margin:0;background:#080808;color:white;font-family:Arial,sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden}header,footer{padding:3vh 4vw;display:flex;justify-content:space-between;align-items:center;gap:2vw}#clock{font:normal min(30vw,48vh) monospace;font-variant-numeric:tabular-nums;line-height:1.1;color:#f09a20}main{flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;min-height:0}#title{font-size:4vh;text-align:center}#status,footer{font-size:3vh;color:#aaa}#box,#trainer{max-width:60vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:3vh}#logo{max-width:12vw;max-height:9vh;object-fit:contain}#note{font-size:3vh;white-space:pre-wrap;max-width:80vw;max-height:16vh;overflow:hidden}button{background:#222;color:#fff;border:1px solid #555;padding:8px;border-radius:8px}</style>
 <header><span id="box"></span><span id="trainer"></span><img id="logo" hidden></header><main><div id="status">Conectando…</div><div id="clock">00:00</div><div id="title"></div><p id="note"></p></main><footer><span>Workout Timer</span><button id="full" hidden>Pantalla completa</button><span id="date"></span></footer>
+<script src="sounds.js"></script><script src="audio.js"></script>
 <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script><script>const el=id=>document.getElementById(id);el('full').onclick=()=>document.documentElement.requestFullscreen?.();el('date').textContent=new Date().toLocaleDateString('es');
 function render(s){for(const k of ['box','trainer','clock'])el(k).textContent=s[k]||'';el('title').textContent=s.hideRounds?(s.phase||''):(s.title||'');el('note').textContent=s.showText?(s.description||''):'';el('clock').style.color=/^#[0-9a-f]{6}$/i.test(s.color)?s.color:'#f09a20';el('status').textContent=s.active?(s.paused?'EN PAUSA':'● EN VIVO'):'EN ESPERA';const logo=typeof s.logo==='string'&&s.logo.startsWith('data:image/')?s.logo:'';el('logo').hidden=!logo;if(logo)el('logo').src=logo;}
+// Preload the same sound assets used by the phone; no streamed screen/audio.
+const players = new Map();
+let currentAudio = null;
+let currentDisplay = {};
+let lastSender = null;
+function audioReport(result,id){if(lastSender){try{context.sendCustomMessage('urn:x-cast:cl.sebastianvega.workouttimer',lastSender,{type:'audioReport',result,id});}catch(e){}}}
+let audioFailed = false;
+function stopAudio(){if(currentAudio){currentAudio.pause();currentAudio.currentTime=0;currentAudio=null;}}
+function audioError(){audioReport('error',null);audioFailed=true;el('status').textContent='No se pudo reproducir el sonido en la TV';}
+for(const [name,url] of Object.entries(window.WORKOUT_TV_SOUNDS)){
+  const player=new Audio(url);player.preload='auto';player.addEventListener('error',audioError);player.load();players.set(name,player);
+}
+const receiveAudio=WorkoutTvAudio.createCueReceiver(cue=>{
+  const player=players.get(cue.sound);if(!player)return;
+  stopAudio();
+  if(cue.frame && typeof cue.frame==='object')render({...currentDisplay,...cue.frame});
+  player.volume=Math.min(1,Math.max(0,cue.volume));currentAudio=player;
+  const started=player.play();if(started&&started.then)started.then(()=>audioReport('started',cue.id)).catch(audioError);
+},stopAudio);
 let lastUpdate=Date.now();
 const context=cast.framework.CastReceiverContext.getInstance();
-context.addCustomMessageListener('urn:x-cast:cl.sebastianvega.workouttimer',event=>{try{const state=typeof event.data==='string'?JSON.parse(event.data):event.data;if(!state||typeof state!=='object')return;render(state);lastUpdate=Date.now();}catch(e){el('status').textContent='No se pudo actualizar el reloj';}});
-setInterval(()=>{if(Date.now()-lastUpdate>5000)el('status').textContent='SIN CONEXIÓN · Revisa el teléfono';},1000);
+context.addCustomMessageListener('urn:x-cast:cl.sebastianvega.workouttimer',event=>{try{const state=typeof event.data==='string'?JSON.parse(event.data):event.data;if(!state||typeof state!=='object')return;lastSender=event.senderId;currentDisplay=state;render(state);receiveAudio(state);if(audioFailed)el('status').textContent='No se pudo reproducir el sonido en la TV';lastUpdate=Date.now();}catch(e){el('status').textContent='No se pudo actualizar el reloj';}});
+setInterval(()=>{if(Date.now()-lastUpdate>5000){stopAudio();el('status').textContent='SIN CONEXIÓN · Revisa el teléfono';}},1000);
 context.start({disableIdleTimeout:true});
 </script></html>
